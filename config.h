@@ -32,7 +32,7 @@ static unsigned int columns    = 1;
  */
 static const char worddelimiters[] = " ";
 
-/* Size of the window border */
+/* Size of the border */
 static const unsigned int border_width = 0;
 
 
