@@ -30,7 +30,7 @@
 #define OPAQUE 0xFFU
 
 /* enums */
-enum { SchemeNorm, SchemeSel, SchemeOut, SchemeLast }; /* color schemes */
+enum { SchemeNorm, SchemeSel, SchemeOut, SchemeNormHighlight, SchemeSelHighlight, SchemeLast }; /* color schemes */
 
 struct item {
 	char *text;
@@ -171,6 +171,43 @@ cistrstr(const char *s, const char *sub)
 	return NULL;
 }
 
+static void
+drawhighlights(struct item *item, int x, int y, int maxw)
+{
+	char restorechar, tokens[sizeof text], *highlight,  *token;
+	int indentx, highlightlen;
+
+	drw_setscheme(drw, scheme[item == sel ? SchemeSelHighlight : SchemeNormHighlight]);
+	strcpy(tokens, text);
+	for (token = strtok(tokens, " "); token; token = strtok(NULL, " ")) {
+		highlight = fstrstr(item->text, token);
+		while (highlight) {
+			// Move item str end, calc width for highlight indent, & restore
+			highlightlen = highlight - item->text;
+			restorechar = *highlight;
+			item->text[highlightlen] = '\0';
+			indentx = TEXTW(item->text);
+			item->text[highlightlen] = restorechar;
+
+			// Move highlight str end, draw highlight, & restore
+			restorechar = highlight[strlen(token)];
+			highlight[strlen(token)] = '\0';
+			if (indentx - (lrpad / 2) - 1 < maxw)
+				drw_text(
+					drw,
+					x + indentx - (lrpad / 2) - 1,
+					y,
+					MIN(maxw - indentx, TEXTW(highlight) - lrpad),
+					bh, 0, highlight, 0
+				);
+			highlight[strlen(token)] = restorechar;
+
+			if (strlen(highlight) - strlen(token) < strlen(token)) break;
+			highlight = fstrstr(highlight + strlen(token), token);
+		}
+	}
+}
+
 static int
 drawitem(struct item *item, int x, int y, int w)
 {
@@ -181,7 +218,9 @@ drawitem(struct item *item, int x, int y, int w)
 	else
 		drw_setscheme(drw, scheme[SchemeNorm]);
 
-	return drw_text(drw, x, y, w, bh, lrpad / 2, item->text, 0);
+	int r = drw_text(drw, x, y, w, bh, lrpad / 2, item->text, 0);
+	drawhighlights(item, x, y, w);
+	return r;
 }
 
 static void
@@ -189,7 +228,7 @@ drawmenu(void)
 {
 	unsigned int curpos;
 	struct item *item;
-	int x = 0, y = 0, w;
+	int x = 0, y = 0, w = 0;
  char *censort;
 
 	drw_setscheme(drw, scheme[SchemeNorm]);
@@ -210,9 +249,16 @@ drawmenu(void)
 	} else drw_text(drw, x, 0, w, bh, lrpad / 2, text, 0);
 
 	curpos = TEXTW(text) - TEXTW(&text[cursor]);
-	if ((curpos += lrpad / 2 - 1) < w) {
+	if (draw_input) {
+		w = (lines > 0 || !matches) ? mw - x : inputw;
 		drw_setscheme(drw, scheme[SchemeNorm]);
-		drw_rect(drw, x + curpos, 2, 2, bh - 4, 1, 0);
+		drw_text(drw, x, 0, w, bh, lrpad / 2, text, 0);
+
+		curpos = TEXTW(text) - TEXTW(&text[cursor]);
+		if ((curpos += lrpad / 2 - 1) < w) {
+			drw_setscheme(drw, scheme[SchemeNorm]);
+			drw_rect(drw, x + curpos, 2, 2, bh - 4, 1, 0);
+}
 	}
 
 	if (lines > 0) {
@@ -232,8 +278,8 @@ drawmenu(void)
 		if (curr->left) {
 			drw_setscheme(drw, scheme[SchemeNorm]);
 			drw_text(drw, x, 0, w, bh, lrpad / 2, "<", 0);
+			x += w;
 		}
-		x += w;
 		for (item = curr; item != next; item = item->right)
 			x = drawitem(item, x, 0, MIN(TEXTW(item->text), mw - x - TEXTW(">")));
 		if (next) {
@@ -426,16 +472,19 @@ keypress(XKeyEvent *ev)
 		case XK_p: ksym = XK_Up;        break;
 
 		case XK_k: /* delete right */
-			text[cursor] = '\0';
-			match();
+			if (draw_input) {
+				text[cursor] = '\0';
+				match();
+			}
 			break;
 		case XK_u: /* delete left */
-			insert(NULL, 0 - cursor);
+			if (draw_input)
+				insert(NULL, 0 - cursor);
 			break;
 		case XK_w: /* delete word */
-			while (cursor > 0 && strchr(worddelimiters, text[nextrune(-1)]))
+			while (cursor > 0 && strchr(worddelimiters, text[nextrune(-1)]) && draw_input)
 				insert(NULL, nextrune(-1) - cursor);
-			while (cursor > 0 && !strchr(worddelimiters, text[nextrune(-1)]))
+			while (cursor > 0 && !strchr(worddelimiters, text[nextrune(-1)]) && draw_input)
 				insert(NULL, nextrune(-1) - cursor);
 			break;
 		case XK_y: /* paste selection */
@@ -480,21 +529,21 @@ keypress(XKeyEvent *ev)
 	switch(ksym) {
 	default:
 insert:
-		if (!iscntrl(*buf))
+		if (!iscntrl((unsigned char)*buf) && draw_input)
 			insert(buf, len);
 		break;
 	case XK_Delete:
-		if (text[cursor] == '\0')
+		if (text[cursor] == '\0' || !draw_input)
 			return;
 		cursor = nextrune(+1);
 		/* fallthrough */
 	case XK_BackSpace:
-		if (cursor == 0)
+		if (cursor == 0 || !draw_input)
 			return;
 		insert(NULL, nextrune(-1) - cursor);
 		break;
 	case XK_End:
-		if (text[cursor] != '\0') {
+		if (text[cursor] != '\0' && draw_input) {
 			cursor = strlen(text);
 			break;
 		}
@@ -571,7 +620,7 @@ insert:
 		}
 		break;
 	case XK_Tab:
-		if (!sel)
+		if (!sel || !draw_input)
 			return;
 		strncpy(text, sel->text, sizeof text - 1);
 		text[sizeof text - 1] = '\0';
@@ -817,6 +866,7 @@ setup(void)
 	lines = MAX(lines, 0);
 	mh = (lines + 1) * bh;
 	promptw = (prompt && *prompt) ? TEXTW(prompt) - lrpad / 4 : 0;
+	inputw = !draw_input ? 0 : mw / 3; /* input width: ~33% of monitor width */
 #ifdef XINERAMA
 	i = 0;
 	if (parentwin == root && (info = XineramaQueryScreens(dpy, &n))) {
@@ -897,7 +947,7 @@ setup(void)
 static void
 usage(void)
 {
-	fputs("usage: dmenu [-bfiPrv] [-l lines] [-p prompt] [-fn font] [-m monitor]\n"
+	fputs("usage: dmenu [-bfiPrv] [-noi] [-l lines] [-p prompt] [-fn font] [-m monitor]\n"
 	      "             [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]\n", stderr);
 	exit(1);
 }
@@ -942,6 +992,8 @@ main(int argc, char *argv[])
 			topbar = 0;
 		else if (!strcmp(argv[i], "-f"))   /* grabs keyboard before reading stdin */
 			fast = 1;
+	        else if (!strcmp(argv[i], "-noi")) /* no input field. intended to be used with a prompt */
+			draw_input = 0;
 		else if (!strcmp(argv[i], "-i")) { /* case-insensitive item matching */
 			fstrncmp = strncasecmp;
 			fstrstr = cistrstr;
